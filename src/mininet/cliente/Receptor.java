@@ -2,6 +2,7 @@ package mininet.cliente;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 
 import mininet.comun.Log;
 import mininet.protocolo.Mensaje;
@@ -26,6 +27,7 @@ class Receptor implements Runnable {
 
     @Override
     public void run() {
+        String motivo = "el servidor cerro la conexion";
         try {
             String linea;
             while ((linea = entrada.readLine()) != null) {
@@ -35,11 +37,13 @@ class Receptor implements Runnable {
                     Log.info("Mensaje mal formado del servidor: " + linea);
                 }
             }
+        } catch (SocketTimeoutException e) {
+            motivo = "sin latido del servidor por " + Mensaje.LATIDO_TIMEOUT_MS / 1000 + " s";
         } catch (IOException e) {
-            // Conexion cortada; se informa abajo.
+            motivo = "conexion interrumpida: " + e.getMessage();
         }
         if (!cliente.saliendo()) {
-            Log.info("Se perdio la conexion con el servidor");
+            Log.info("Se perdio la conexion con el servidor (" + motivo + ")");
             System.exit(1);
         }
     }
@@ -57,6 +61,7 @@ class Receptor implements Runnable {
             }
             case ACK, PONG, OK, ERROR -> pendientes.respuesta(m);
             case AVISO -> Log.evento(m.origen(), cliente.nombre(), m.tipo(), m.id(), m.contenido());
+            case LATIDO -> { } // respuesta del servidor: basta con que haya llegado
             default -> Log.info("Tipo de mensaje inesperado: " + m.tipo());
         }
     }

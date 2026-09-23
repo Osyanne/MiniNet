@@ -7,9 +7,13 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.ConnectException;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import mininet.comun.Log;
@@ -45,6 +49,11 @@ public class Cliente {
     private final PrintWriter salida;
     private final Pendientes pendientes;
     private final AtomicInteger siguienteId = new AtomicInteger(1);
+    private final ScheduledExecutorService latido = Executors.newSingleThreadScheduledExecutor(tarea -> {
+        Thread hilo = new Thread(tarea, "latido");
+        hilo.setDaemon(true);
+        return hilo;
+    });
     private volatile boolean saliendo;
 
     public static void main(String[] args) throws IOException, InterruptedException {
@@ -63,11 +72,16 @@ public class Cliente {
             }
         } catch (ConnectException e) {
             Log.info("No se pudo conectar con " + args[0] + ":" + args[1] + " (" + e.getMessage() + ")");
+        } catch (SocketTimeoutException e) {
+            Log.info("El servidor no respondio al registro en " + Mensaje.LATIDO_TIMEOUT_MS / 1000 + " s");
         }
     }
 
     Cliente(String nombre, Socket socket) throws IOException {
         this.nombre = nombre;
+        // Latido: el servidor contesta cada LATIDO, asi que si pasan LATIDO_TIMEOUT_MS sin recibir
+        // nada, las lecturas lanzan SocketTimeoutException: el servidor ya no esta.
+        socket.setSoTimeout(Mensaje.LATIDO_TIMEOUT_MS);
         this.entrada = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
         this.salida = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
         this.pendientes = new Pendientes(nombre);
@@ -100,6 +114,8 @@ public class Cliente {
     }
 
     private void ejecutar() throws InterruptedException {
+        latido.scheduleAtFixedRate(this::enviarLatido,
+                Mensaje.LATIDO_INTERVALO_MS, Mensaje.LATIDO_INTERVALO_MS, TimeUnit.MILLISECONDS);
         Thread receptor = new Thread(new Receptor(this, entrada, pendientes), "receptor");
         receptor.setDaemon(true);
         receptor.start();
@@ -148,8 +164,14 @@ public class Cliente {
         Log.evento(nombre, m.destino(), m.tipo(), m.id(), "ENVIADO");
     }
 
+    /** Sin log: sale cada 5 s y taparia los eventos importantes. En Wireshark si se ve. */
+    private synchronized void enviarLatido() {
+        salida.println(new Mensaje(Tipo.LATIDO, 0, nombre, Mensaje.SERVIDOR, "").serializar());
+    }
+
     private void salir(Thread receptor) throws InterruptedException {
         saliendo = true;
+        latido.shutdownNow();
         solicitar(Tipo.SALIR, Mensaje.SERVIDOR, "");
         receptor.join(2000); // espera el OK del servidor y el cierre de la conexion
         Log.info(pendientes.resumen());
