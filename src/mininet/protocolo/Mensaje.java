@@ -6,13 +6,14 @@ package mininet.protocolo;
  *     TIPO|id|origen|destino|contenido\n
  *
  * Ej.: MENSAJE|7|cliente01|cliente02|Hola
- *      ACK|7|cliente02|cliente01|
+ *      ACK|7|cliente02|cliente01|MENSAJE
  *
  * - id: número que pone quien origina el mensaje. Las respuestas (ACK, PONG, OK, ERROR) repiten
  *   el id de la petición: así el emisor sabe a qué responden y puede medir la latencia. También
  *   sirve para encontrar el mensaje en una captura de Wireshark.
  * - destino: nombre de un cliente, "*" (todos), el nombre de un grupo o "SERVIDOR".
- * - contenido: texto libre. Puede contener '|' porque es el último campo.
+ * - contenido: texto libre. Puede contener '|' porque es el último campo. En un ACK es el tipo
+ *   del mensaje que confirma.
  */
 public record Mensaje(Tipo tipo, int id, String origen, String destino, String contenido) {
 
@@ -39,6 +40,14 @@ public record Mensaje(Tipo tipo, int id, String origen, String destino, String c
         }
         return new Mensaje(Tipo.valueOf(campos[0]), Integer.parseInt(campos[1]),
                 campos[2], campos[3], campos[4]);
+    }
+
+    /**
+     * Bloques de ráfaga y sus ACK. Llegan de a miles, así que el servidor y los clientes no los
+     * registran uno por uno: el emisor registra el resultado de la ráfaga completa.
+     */
+    public boolean esDeRafaga() {
+        return tipo == Tipo.RAFAGA || (tipo == Tipo.ACK && Tipo.RAFAGA.name().equals(contenido));
     }
 
     /** Respuesta dirigida al origen de este mensaje, con el mismo id (ACK, PONG, OK, ERROR). */

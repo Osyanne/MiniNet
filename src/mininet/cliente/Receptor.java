@@ -53,8 +53,10 @@ class Receptor implements Runnable {
             case MENSAJE, DIFUSION, GRUPO -> {
                 Log.evento(m.origen(), cliente.nombre(), m.tipo(), m.id(), "RECIBIDO");
                 System.out.println("   [" + etiqueta(m) + "] " + m.origen() + ": " + m.contenido());
-                cliente.enviar(m.responder(Tipo.ACK, cliente.nombre(), ""));
+                cliente.enviar(m.responder(Tipo.ACK, cliente.nombre(), m.tipo().name()));
             }
+            // Bloques de ráfaga: se confirman sin log ni pantalla, porque llegan de a miles.
+            case RAFAGA -> cliente.escribir(m.responder(Tipo.ACK, cliente.nombre(), m.tipo().name()));
             case PING -> {
                 Log.evento(m.origen(), cliente.nombre(), m.tipo(), m.id(), "RECIBIDO");
                 cliente.enviar(m.responder(Tipo.PONG, cliente.nombre(), ""));
