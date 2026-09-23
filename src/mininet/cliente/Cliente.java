@@ -39,7 +39,8 @@ public class Cliente {
               unir <grupo>            unirse a un grupo
               grupo <grupo> <texto>   mensaje a un grupo (multicast logico)
               estado <nombre>         consultar si un participante esta activo
-              ping <nombre>           medir latencia extremo a extremo
+              ping <nombre> [veces]   medir latencia extremo a extremo; con [veces], un ping
+                                      por segundo para medir disponibilidad en el tiempo
               rafaga <nombre> <cantidad> <bytes>
                                       medir throughput: envia <cantidad> bloques de <bytes> seguidos
               resumen                 metricas de esta sesion
@@ -48,14 +49,16 @@ public class Cliente {
 
     private static final int MAX_BLOQUES = 100_000;
     private static final int MAX_BYTES_BLOQUE = 65_536;
+    private static final int MAX_PINGS = 3600; // una hora a un ping por segundo
 
     private final String nombre;
     private final BufferedReader entrada;
     private final PrintWriter salida;
     private final Pendientes pendientes;
     private final AtomicInteger siguienteId = new AtomicInteger(1);
-    private final ScheduledExecutorService latido = Executors.newSingleThreadScheduledExecutor(tarea -> {
-        Thread hilo = new Thread(tarea, "latido");
+    // Tareas programadas: el latido y las series de ping.
+    private final ScheduledExecutorService temporizador = Executors.newSingleThreadScheduledExecutor(tarea -> {
+        Thread hilo = new Thread(tarea, "temporizador");
         hilo.setDaemon(true);
         return hilo;
     });
@@ -119,7 +122,7 @@ public class Cliente {
     }
 
     private void ejecutar() throws InterruptedException {
-        latido.scheduleAtFixedRate(this::enviarLatido,
+        temporizador.scheduleAtFixedRate(this::enviarLatido,
                 Mensaje.LATIDO_INTERVALO_MS, Mensaje.LATIDO_INTERVALO_MS, TimeUnit.MILLISECONDS);
         Thread receptor = new Thread(new Receptor(this, entrada, pendientes), "receptor");
         receptor.setDaemon(true);
@@ -141,7 +144,7 @@ public class Cliente {
                 case "unir" -> solicitar(Tipo.UNIR, args[0], "");
                 case "grupo" -> solicitar(Tipo.GRUPO, args[0], texto);
                 case "estado" -> solicitar(Tipo.ESTADO, args[0], "");
-                case "ping" -> solicitar(Tipo.PING, args[0], "");
+                case "ping" -> ping(args[0], texto);
                 case "rafaga" -> rafaga(args[0], texto);
                 case "resumen" -> System.out.println(pendientes.resumen());
                 case "ayuda" -> System.out.print(AYUDA);
@@ -160,6 +163,26 @@ public class Cliente {
         Mensaje m = new Mensaje(tipo, siguienteId.getAndIncrement(), nombre, destino, contenido);
         pendientes.registrar(m);
         enviar(m);
+    }
+
+    /**
+     * Uno o varios PING, uno por segundo. Cada PING con PONG cuenta como "disponible" y cada uno
+     * sin respuesta como "no disponible": Pendientes calcula el porcentaje por participante.
+     */
+    private void ping(String destino, String veces) {
+        int cantidad;
+        try {
+            cantidad = veces.isBlank() ? 1 : Integer.parseInt(veces.trim());
+        } catch (NumberFormatException e) {
+            cantidad = 0;
+        }
+        if (destino.isEmpty() || cantidad < 1 || cantidad > MAX_PINGS) {
+            System.out.println("Uso: ping <nombre> [veces]   (veces entre 1 y " + MAX_PINGS + ")");
+            return;
+        }
+        for (int i = 0; i < cantidad; i++) {
+            temporizador.schedule(() -> solicitar(Tipo.PING, destino, ""), i, TimeUnit.SECONDS);
+        }
     }
 
     /**
@@ -215,7 +238,7 @@ public class Cliente {
 
     private void salir(Thread receptor) throws InterruptedException {
         saliendo = true;
-        latido.shutdownNow();
+        temporizador.shutdownNow(); // detiene el latido y las series de ping que queden
         solicitar(Tipo.SALIR, Mensaje.SERVIDOR, "");
         receptor.join(2000); // espera el OK del servidor y el cierre de la conexion
         Log.info(pendientes.resumen());

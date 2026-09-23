@@ -4,9 +4,11 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import mininet.comun.Log;
 import mininet.protocolo.Mensaje;
@@ -17,7 +19,9 @@ import mininet.protocolo.Tipo;
  * - latencia: tiempo desde el envío hasta que llega el ACK/PONG del otro cliente (ida y vuelta);
  * - pérdida: ACK/PONG que no llegaron antes de TIMEOUT_MS;
  * - throughput: lo mide la Rafaga en curso, que se lleva aparte para no mezclar sus miles de
- *   bloques (y sus demoras por cola) con la latencia y la pérdida de los mensajes normales.
+ *   bloques (y sus demoras por cola) con la latencia y la pérdida de los mensajes normales;
+ * - disponibilidad: por participante, % de PING que obtuvieron PONG. Un PING sin respuesta
+ *   (TIMEOUT) o rechazado porque el destino no está (ERROR) cuenta como "no disponible".
  */
 class Pendientes {
 
@@ -40,8 +44,15 @@ class Pendientes {
         }
     }
 
+    /** PING enviados a un participante y cuántos obtuvieron PONG. */
+    private static final class Sondeos {
+        int enviados;
+        int respondidos;
+    }
+
     private final String nombre;
     private final Map<Integer, Pendiente> pendientes = new HashMap<>();
+    private final Map<String, Sondeos> sondeos = new TreeMap<>(); // por participante, en orden
 
     // Métricas de la sesión. Esperados/recibidos solo cuentan mensajes ya cerrados.
     private int totalEsperados;
@@ -109,6 +120,9 @@ class Pendientes {
             }
             case ERROR -> {
                 Log.evento(r.origen(), nombre, r.tipo(), r.id(), r.contenido());
+                if (p.mensaje.tipo() == Tipo.PING) {
+                    contarSondeo(p.mensaje.destino(), false); // el destino no está conectado
+                }
                 pendientes.remove(r.id());
                 return;
             }
@@ -128,11 +142,15 @@ class Pendientes {
         String latencia = latencias == 0 ? "sin datos" : String.format(Locale.ROOT,
                 "prom %.2f / min %.2f / max %.2f ms", sumaMs / latencias, minMs, maxMs);
         String throughput = rafaga != null && rafaga.finalizada() ? rafaga.resumenCorto() : "ninguna";
-        // TODO (grupo): agregar disponibilidad (% de PING a un participante que obtuvieron PONG).
+        String disponibilidad = sondeos.isEmpty() ? "sin datos (use ping)" : sondeos.entrySet().stream()
+                .map(e -> String.format(Locale.ROOT, "%s %d/%d (%.1f %%)", e.getKey(),
+                        e.getValue().respondidos, e.getValue().enviados,
+                        100.0 * e.getValue().respondidos / e.getValue().enviados))
+                .collect(Collectors.joining(", "));
         return String.format(Locale.ROOT,
                 "Resumen: %d/%d confirmaciones recibidas, perdida %.1f %%, latencia %s, %d en espera"
-                        + ", ultima rafaga %s",
-                totalRecibidos, totalEsperados, perdida, latencia, pendientes.size(), throughput);
+                        + " | ultima rafaga %s | disponibilidad %s",
+                totalRecibidos, totalEsperados, perdida, latencia, pendientes.size(), throughput, disponibilidad);
     }
 
     private synchronized void revisarTimeouts() {
@@ -161,6 +179,17 @@ class Pendientes {
     private void cerrar(Pendiente p) {
         totalEsperados += Math.max(p.acksEsperados, 0);
         totalRecibidos += p.acksRecibidos;
+        if (p.mensaje.tipo() == Tipo.PING) {
+            contarSondeo(p.mensaje.destino(), p.acksRecibidos > 0);
+        }
+    }
+
+    private void contarSondeo(String destino, boolean respondio) {
+        Sondeos s = sondeos.computeIfAbsent(destino, d -> new Sondeos());
+        s.enviados++;
+        if (respondio) {
+            s.respondidos++;
+        }
     }
 
     private static String formatoMs(double ms) {

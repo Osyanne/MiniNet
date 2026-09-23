@@ -105,7 +105,8 @@ Cada proceso escribe en consola y en `servidor.log` o `<nombre>.log`. Ejemplo re
 ```
 
 El comando `resumen` muestra confirmaciones recibidas y esperadas, pérdida, latencia
-(promedio, mínima y máxima) y el throughput de la última ráfaga.
+(promedio, mínima y máxima), el throughput de la última ráfaga y la disponibilidad de cada
+participante al que se le hizo `ping`.
 
 ## Medir throughput
 
@@ -132,13 +133,31 @@ ninguna; los bloques que faltan cuentan como perdidos. Ejemplo real en localhost
 - La latencia y la pérdida del `resumen` no incluyen las ráfagas: los bloques en cola tienen
   demoras que no representan la latencia de la red.
 
+## Medir disponibilidad
+
+```
+disponibilidad de B = PING a B que obtuvieron PONG / PING enviados a B
+```
+
+Un `PING` sin respuesta en 3 s (`TIMEOUT`), o rechazado porque B no está conectado (`ERROR`),
+cuenta como "no disponible". `ping <nombre> <veces>` envía un ping por segundo, así que
+`ping c2 60` mide la disponibilidad de c2 durante un minuto. Ejemplo real: se mató a c2 a mitad
+de una serie de 10 pings.
+
+```
+Resumen: ... | disponibilidad c2 5/10 (50.0 %), c3 3/3 (100.0 %), fantasma 0/3 (0.0 %), nadie 0/1 (0.0 %)
+```
+
+Experimento sugerido entre dos computadoras: `ping c2 120` desde c1 y desconectar el Wi-Fi de c2
+unos 30 s en medio de la serie.
+
 ## Pendiente para el grupo
 
 - [x] **Latido** para detectar un equipo desconectado de la red.
 - [ ] **Probar el latido entre dos computadoras:** desconectar el Wi-Fi de un cliente y ver
       `CAIDA (sin latido por 15 s)` en el servidor.
 - [x] **Comando `rafaga`** para medir throughput.
-- [ ] **Disponibilidad** en el resumen. Ver el TODO en `Pendientes.resumen()`.
+- [x] **Disponibilidad** en el resumen.
 - [ ] **Experimentos:** correr con distintas pérdidas y retardos y tabular los resultados.
 - [ ] **Especificación del protocolo** en el informe; la tabla de arriba es el punto de partida.
 - [ ] **Wireshark:** capturar entre dos equipos con el filtro `tcp.port == 5000` y buscar el `id`
@@ -160,3 +179,11 @@ ninguna; los bloques que faltan cuentan como perdidos. Ejemplo real en localhost
   el costo por mensaje pesa más que los datos, y la cabecera MiniNet pasa de +2 % a +19 %.
 - La primera ráfaga de una ejecución suele salir más lenta porque la JVM todavía está optimizando
   el código: conviene repetir cada medición varias veces y promediar.
+- Disponibilidad y pérdida no son lo mismo. Un `PING` a alguien desconectado da `ERROR` y baja
+  la disponibilidad, pero no cuenta como pérdida (el mensaje no se perdió: no había a quién
+  entregarlo). Un `PING` sin respuesta (`TIMEOUT`) cuenta para las dos. Por la misma razón, con
+  pérdida simulada la disponibilidad medida baja aunque todos estén conectados: un sondeo por
+  `PING` no puede distinguir "no está" de "se perdió la respuesta".
+- Al desconectar el Wi-Fi de un participante, los pings de los primeros 15 s deberían dar
+  `TIMEOUT` (el servidor todavía no sabe que se fue) y los siguientes `ERROR` (ya lo dio por
+  caído por falta de latido). Conviene comprobarlo en el experimento.
