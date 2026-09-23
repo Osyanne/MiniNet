@@ -1,0 +1,143 @@
+package mininet.cliente;
+
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import mininet.comun.Log;
+import mininet.protocolo.Mensaje;
+import mininet.protocolo.Tipo;
+
+/**
+ * Mensajes enviados que esperan respuesta, y las métricas que salen de ellos:
+ * - latencia: tiempo desde el envío hasta que llega el ACK/PONG del otro cliente (ida y vuelta);
+ * - pérdida: ACK/PONG que no llegaron antes de TIMEOUT_MS.
+ */
+class Pendientes {
+
+    static final long TIMEOUT_MS = 3000;
+
+    /** Un mensaje enviado y lo que va llegando de vuelta. */
+    private static final class Pendiente {
+        final Mensaje mensaje;
+        final long enviadoNanos = System.nanoTime();
+        int acksEsperados; // 1 en MENSAJE/PING; en DIFUSION/GRUPO lo dice el OK (-1 = aun no se sabe)
+        int acksRecibidos;
+
+        Pendiente(Mensaje mensaje) {
+            this.mensaje = mensaje;
+            this.acksEsperados = (mensaje.tipo() == Tipo.MENSAJE || mensaje.tipo() == Tipo.PING) ? 1 : -1;
+        }
+
+        boolean completo() {
+            return acksEsperados >= 0 && acksRecibidos >= acksEsperados;
+        }
+    }
+
+    private final String nombre;
+    private final Map<Integer, Pendiente> pendientes = new HashMap<>();
+
+    // Métricas de la sesión. Esperados/recibidos solo cuentan mensajes ya cerrados.
+    private int totalEsperados;
+    private int totalRecibidos;
+    private int latencias;
+    private double sumaMs;
+    private double minMs = Double.MAX_VALUE;
+    private double maxMs;
+
+    Pendientes(String nombre) {
+        this.nombre = nombre;
+        ScheduledExecutorService revisor = Executors.newSingleThreadScheduledExecutor(tarea -> {
+            Thread hilo = new Thread(tarea, "revisor-timeouts");
+            hilo.setDaemon(true);
+            return hilo;
+        });
+        revisor.scheduleAtFixedRate(this::revisarTimeouts, 1, 1, TimeUnit.SECONDS);
+    }
+
+    synchronized void registrar(Mensaje m) {
+        pendientes.put(m.id(), new Pendiente(m));
+    }
+
+    /** Llegó una respuesta (ACK, PONG, OK o ERROR) con el id de un mensaje que enviamos. */
+    synchronized void respuesta(Mensaje r) {
+        Pendiente p = pendientes.get(r.id());
+        if (p == null) {
+            Log.evento(r.origen(), nombre, r.tipo(), r.id(), "TARDIO (llego despues del timeout)");
+            return;
+        }
+        double ms = (System.nanoTime() - p.enviadoNanos) / 1_000_000.0;
+        switch (r.tipo()) {
+            case ACK, PONG -> {
+                p.acksRecibidos++;
+                latencias++;
+                sumaMs += ms;
+                minMs = Math.min(minMs, ms);
+                maxMs = Math.max(maxMs, ms);
+                Log.evento(r.origen(), nombre, r.tipo(), r.id(), formatoMs(ms));
+            }
+            case OK -> {
+                Log.evento(r.origen(), nombre, r.tipo(), r.id(), formatoMs(ms) + " " + r.contenido());
+                if (p.mensaje.tipo() == Tipo.DIFUSION || p.mensaje.tipo() == Tipo.GRUPO) {
+                    p.acksEsperados = Integer.parseInt(r.contenido()); // réplicas hechas por el servidor
+                } else {
+                    pendientes.remove(r.id()); // LISTAR, ESTADO, UNIR, SALIR: no esperan nada más
+                    return;
+                }
+            }
+            case ERROR -> {
+                Log.evento(r.origen(), nombre, r.tipo(), r.id(), r.contenido());
+                pendientes.remove(r.id());
+                return;
+            }
+            default -> {
+                return;
+            }
+        }
+        if (p.completo()) {
+            cerrar(p);
+            pendientes.remove(r.id());
+        }
+    }
+
+    synchronized String resumen() {
+        int perdidos = totalEsperados - totalRecibidos;
+        double perdida = totalEsperados == 0 ? 0 : 100.0 * perdidos / totalEsperados;
+        String latencia = latencias == 0 ? "sin datos" : String.format(Locale.ROOT,
+                "prom %.2f / min %.2f / max %.2f ms", sumaMs / latencias, minMs, maxMs);
+        // TODO (grupo): agregar throughput (bytes confirmados por segundo, ver comando "rafaga")
+        // y disponibilidad (% de PING a un participante que obtuvieron PONG).
+        return String.format(Locale.ROOT,
+                "Resumen: %d/%d confirmaciones recibidas, perdida %.1f %%, latencia %s, %d en espera",
+                totalRecibidos, totalEsperados, perdida, latencia, pendientes.size());
+    }
+
+    private synchronized void revisarTimeouts() {
+        long ahora = System.nanoTime();
+        Iterator<Pendiente> it = pendientes.values().iterator();
+        while (it.hasNext()) {
+            Pendiente p = it.next();
+            if ((ahora - p.enviadoNanos) / 1_000_000 < TIMEOUT_MS) {
+                continue;
+            }
+            String detalle = p.acksEsperados < 0 ? "sin respuesta del servidor"
+                    : p.acksRecibidos + "/" + p.acksEsperados + " confirmaciones";
+            Log.evento(nombre, p.mensaje.destino(), p.mensaje.tipo(), p.mensaje.id(), "TIMEOUT " + detalle);
+            cerrar(p);
+            it.remove();
+        }
+    }
+
+    private void cerrar(Pendiente p) {
+        totalEsperados += Math.max(p.acksEsperados, 0);
+        totalRecibidos += p.acksRecibidos;
+    }
+
+    private static String formatoMs(double ms) {
+        return String.format(Locale.ROOT, "%.2f ms", ms);
+    }
+}
