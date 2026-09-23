@@ -92,7 +92,7 @@ class ManejadorCliente implements Runnable {
                 registro.unir(m.destino(), nombre);
                 responder(m, Tipo.OK, "unido a " + m.destino());
             }
-            case MENSAJE, PING, ACK, PONG -> reenviarA(m);
+            case MENSAJE, PING, RAFAGA, ACK, PONG -> reenviarA(m);
             case DIFUSION -> reenviarAVarios(m, registro.nombres());
             case GRUPO -> reenviarAVarios(m, registro.miembros(m.destino()));
             case SALIR -> {
@@ -126,13 +126,13 @@ class ManejadorCliente implements Runnable {
         }
     }
 
-    /** Unicast lógico: entrega m a un único destinatario (MENSAJE, PING y sus ACK/PONG). */
+    /** Unicast lógico: entrega m a un único destinatario (MENSAJE, PING, RAFAGA y sus ACK/PONG). */
     private void reenviarA(Mensaje m) {
         ManejadorCliente receptor = registro.buscar(m.destino());
         if (receptor == null) {
             if (m.tipo() == Tipo.ACK || m.tipo() == Tipo.PONG) {
                 // Quien esperaba la confirmacion ya se fue; no hay a quien avisar.
-                Log.evento(nombre, m.destino(), m.tipo(), m.id(), "DESCARTADO (destino ya no esta)");
+                registrarSiCorresponde(m, null, "DESCARTADO (destino ya no esta)");
             } else {
                 responder(m, Tipo.ERROR, m.destino() + " no disponible");
             }
@@ -163,19 +163,29 @@ class ManejadorCliente implements Runnable {
     /** Escribe m en el socket del receptor, salvo que el simulador de red lo "pierda". */
     private void entregar(ManejadorCliente receptor, Mensaje m) {
         if (red.descartar()) {
-            Log.evento(nombre, receptor.nombre(), m.tipo(), m.id(), "DESCARTADO (perdida simulada)");
+            registrarSiCorresponde(m, receptor, "DESCARTADO (perdida simulada)");
             return;
         }
         // El servidor pone el origen real: un cliente no puede hacerse pasar por otro.
         receptor.enviar(new Mensaje(m.tipo(), m.id(), nombre, m.destino(), m.contenido()));
-        Log.evento(nombre, receptor.nombre(), m.tipo(), m.id(), "REENVIADO");
+        registrarSiCorresponde(m, receptor, "REENVIADO");
     }
 
     /** Respuesta del servidor a quien envió m. Conserva el id para que el cliente la asocie. */
     private void responder(Mensaje m, Tipo tipo, String contenido) {
         enviar(m.responder(tipo, Mensaje.SERVIDOR, contenido));
-        String quien = nombre != null ? nombre : m.origen();
-        Log.evento(quien, m.destino(), m.tipo(), m.id(), tipo + " " + contenido);
+        if (!m.esDeRafaga()) {
+            String quien = nombre != null ? nombre : m.origen();
+            Log.evento(quien, m.destino(), m.tipo(), m.id(), tipo + " " + contenido);
+        }
+    }
+
+    /** Log de un reenvío. Los bloques de ráfaga y sus ACK no se registran: son miles. */
+    private void registrarSiCorresponde(Mensaje m, ManejadorCliente receptor, String resultado) {
+        if (!m.esDeRafaga()) {
+            String destino = receptor != null ? receptor.nombre() : m.destino();
+            Log.evento(nombre, destino, m.tipo(), m.id(), resultado);
+        }
     }
 
     /** synchronized: varios hilos (uno por cada emisor) pueden escribirle a este cliente a la vez. */

@@ -15,7 +15,9 @@ import mininet.protocolo.Tipo;
 /**
  * Mensajes enviados que esperan respuesta, y las métricas que salen de ellos:
  * - latencia: tiempo desde el envío hasta que llega el ACK/PONG del otro cliente (ida y vuelta);
- * - pérdida: ACK/PONG que no llegaron antes de TIMEOUT_MS.
+ * - pérdida: ACK/PONG que no llegaron antes de TIMEOUT_MS;
+ * - throughput: lo mide la Rafaga en curso, que se lleva aparte para no mezclar sus miles de
+ *   bloques (y sus demoras por cola) con la latencia y la pérdida de los mensajes normales.
  */
 class Pendientes {
 
@@ -49,6 +51,8 @@ class Pendientes {
     private double minMs = Double.MAX_VALUE;
     private double maxMs;
 
+    private Rafaga rafaga; // la ráfaga en curso, o la última (para ignorar sus ACK tardíos)
+
     Pendientes(String nombre) {
         this.nombre = nombre;
         ScheduledExecutorService revisor = Executors.newSingleThreadScheduledExecutor(tarea -> {
@@ -63,8 +67,22 @@ class Pendientes {
         pendientes.put(m.id(), new Pendiente(m));
     }
 
+    synchronized boolean rafagaEnCurso() {
+        return rafaga != null && !rafaga.finalizada();
+    }
+
+    synchronized void iniciarRafaga(Rafaga nueva) {
+        rafaga = nueva;
+    }
+
     /** Llegó una respuesta (ACK, PONG, OK o ERROR) con el id de un mensaje que enviamos. */
     synchronized void respuesta(Mensaje r) {
+        if (rafaga != null && rafaga.contiene(r.id())) {
+            if (rafaga.respuesta(r)) {
+                finalizarRafaga();
+            }
+            return;
+        }
         Pendiente p = pendientes.get(r.id());
         if (p == null) {
             Log.evento(r.origen(), nombre, r.tipo(), r.id(), "TARDIO (llego despues del timeout)");
@@ -109,14 +127,18 @@ class Pendientes {
         double perdida = totalEsperados == 0 ? 0 : 100.0 * perdidos / totalEsperados;
         String latencia = latencias == 0 ? "sin datos" : String.format(Locale.ROOT,
                 "prom %.2f / min %.2f / max %.2f ms", sumaMs / latencias, minMs, maxMs);
-        // TODO (grupo): agregar throughput (bytes confirmados por segundo, ver comando "rafaga")
-        // y disponibilidad (% de PING a un participante que obtuvieron PONG).
+        String throughput = rafaga != null && rafaga.finalizada() ? rafaga.resumenCorto() : "ninguna";
+        // TODO (grupo): agregar disponibilidad (% de PING a un participante que obtuvieron PONG).
         return String.format(Locale.ROOT,
-                "Resumen: %d/%d confirmaciones recibidas, perdida %.1f %%, latencia %s, %d en espera",
-                totalRecibidos, totalEsperados, perdida, latencia, pendientes.size());
+                "Resumen: %d/%d confirmaciones recibidas, perdida %.1f %%, latencia %s, %d en espera"
+                        + ", ultima rafaga %s",
+                totalRecibidos, totalEsperados, perdida, latencia, pendientes.size(), throughput);
     }
 
     private synchronized void revisarTimeouts() {
+        if (rafagaEnCurso() && rafaga.sinRespuestaHace(TIMEOUT_MS)) {
+            finalizarRafaga();
+        }
         long ahora = System.nanoTime();
         Iterator<Pendiente> it = pendientes.values().iterator();
         while (it.hasNext()) {
@@ -130,6 +152,10 @@ class Pendientes {
             cerrar(p);
             it.remove();
         }
+    }
+
+    private void finalizarRafaga() {
+        Log.evento(nombre, rafaga.destino(), Tipo.RAFAGA, rafaga.primerId(), "FIN " + rafaga.finalizar());
     }
 
     private void cerrar(Pendiente p) {

@@ -7,9 +7,13 @@ import java.util.concurrent.ThreadLocalRandom;
  * Condiciones artificiales para los experimentos: el servidor descarta una fracción de los
  * mensajes que reenvía entre clientes (pérdida) y/o los demora (retardo).
  *
- * Solo afecta al reenvío entre clientes (MENSAJE, DIFUSION, GRUPO, PING, ACK, PONG), no a las
- * respuestas propias del servidor (OK, ERROR). Como el ACK también pasa por el servidor, un
- * retardo de R ms suma unos 2R ms a la latencia ida y vuelta que mide el cliente.
+ * Solo afecta al reenvío entre clientes (MENSAJE, DIFUSION, GRUPO, PING, RAFAGA, ACK, PONG), no
+ * a las respuestas propias del servidor (OK, ERROR) ni a los LATIDO. Como el ACK también pasa por
+ * el servidor, un retardo de R ms suma unos 2R ms a la latencia ida y vuelta que mide el cliente.
+ *
+ * El retardo se aplica mensaje por mensaje en el hilo que atiende al emisor, así que se comporta
+ * como un enlace lento: con R ms por mensaje, una ráfaga no puede pasar de 1000/R mensajes por
+ * segundo.
  */
 class SimuladorRed {
 

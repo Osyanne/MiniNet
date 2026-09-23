@@ -40,9 +40,14 @@ public class Cliente {
               grupo <grupo> <texto>   mensaje a un grupo (multicast logico)
               estado <nombre>         consultar si un participante esta activo
               ping <nombre>           medir latencia extremo a extremo
+              rafaga <nombre> <cantidad> <bytes>
+                                      medir throughput: envia <cantidad> bloques de <bytes> seguidos
               resumen                 metricas de esta sesion
               salir
             """;
+
+    private static final int MAX_BLOQUES = 100_000;
+    private static final int MAX_BYTES_BLOQUE = 65_536;
 
     private final String nombre;
     private final BufferedReader entrada;
@@ -137,14 +142,13 @@ public class Cliente {
                 case "grupo" -> solicitar(Tipo.GRUPO, args[0], texto);
                 case "estado" -> solicitar(Tipo.ESTADO, args[0], "");
                 case "ping" -> solicitar(Tipo.PING, args[0], "");
+                case "rafaga" -> rafaga(args[0], texto);
                 case "resumen" -> System.out.println(pendientes.resumen());
                 case "ayuda" -> System.out.print(AYUDA);
                 case "salir" -> {
                     salir(receptor);
                     return;
                 }
-                // TODO (grupo): "rafaga <nombre> <cantidad> <bytes>" para medir throughput:
-                // enviar muchos MENSAJE seguidos y dividir los bytes confirmados por el tiempo total.
                 default -> System.out.println("Comando desconocido. Escriba 'ayuda'.");
             }
         }
@@ -158,15 +162,55 @@ public class Cliente {
         enviar(m);
     }
 
-    /** synchronized: el hilo principal y el Receptor (al mandar ACK/PONG) usan el mismo socket. */
+    /**
+     * Envía bloques de datos seguidos, sin esperar los ACK, para medir throughput. Pendientes
+     * recibe las confirmaciones y registra el resultado cuando la ráfaga termina.
+     */
+    private void rafaga(String destino, String parametros) {
+        int cantidad;
+        int bytes;
+        try {
+            String[] p = parametros.split("\\s+");
+            cantidad = Integer.parseInt(p[0]);
+            bytes = Integer.parseInt(p[1]);
+        } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
+            System.out.println("Uso: rafaga <nombre> <cantidad> <bytes>   (ej.: rafaga cliente02 1000 1000)");
+            return;
+        }
+        if (cantidad < 1 || cantidad > MAX_BLOQUES || bytes < 1 || bytes > MAX_BYTES_BLOQUE) {
+            System.out.println("Cantidad entre 1 y " + MAX_BLOQUES + ", bytes entre 1 y " + MAX_BYTES_BLOQUE);
+            return;
+        }
+        if (pendientes.rafagaEnCurso()) {
+            System.out.println("Ya hay una rafaga en curso; espere su resultado.");
+            return;
+        }
+        String datos = "x".repeat(bytes);
+        int primerId = siguienteId.getAndAdd(cantidad); // ids consecutivos reservados para la ráfaga
+        Log.evento(nombre, destino, Tipo.RAFAGA, primerId, "INICIO " + cantidad + " bloques de " + bytes + " B");
+        pendientes.iniciarRafaga(new Rafaga(nombre, destino, primerId, cantidad, bytes));
+        for (int i = 0; i < cantidad; i++) {
+            escribir(new Mensaje(Tipo.RAFAGA, primerId + i, nombre, destino, datos));
+        }
+    }
+
+    /** Envía y registra en el log. */
     synchronized void enviar(Mensaje m) {
-        salida.println(m.serializar());
+        escribir(m);
         Log.evento(nombre, m.destino(), m.tipo(), m.id(), "ENVIADO");
     }
 
-    /** Sin log: sale cada 5 s y taparia los eventos importantes. En Wireshark si se ve. */
-    private synchronized void enviarLatido() {
-        salida.println(new Mensaje(Tipo.LATIDO, 0, nombre, Mensaje.SERVIDOR, "").serializar());
+    /**
+     * Envía sin registrar: latidos y bloques de ráfaga, que son demasiados para el log.
+     * synchronized: el hilo principal, el Receptor (ACK/PONG) y el latido usan el mismo socket.
+     */
+    synchronized void escribir(Mensaje m) {
+        salida.println(m.serializar());
+    }
+
+    /** Sale cada 5 s: no va al log porque taparia los eventos importantes. En Wireshark si se ve. */
+    private void enviarLatido() {
+        escribir(new Mensaje(Tipo.LATIDO, 0, nombre, Mensaje.SERVIDOR, ""));
     }
 
     private void salir(Thread receptor) throws InterruptedException {
