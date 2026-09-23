@@ -65,6 +65,7 @@ Cada mensaje es una línea de texto UTF-8: `TIPO|id|origen|destino|contenido`
 | PING | A → S → B | B | — | `PONG` de B |
 | SALIR | C → S | `SERVIDOR` | — | `OK`; luego el servidor cierra la conexión |
 | AVISO | S → C | cliente | texto | — (alguien entró, salió o se cayó) |
+| LATIDO | C → S, cada 5 s | `SERVIDOR` | — | `LATIDO` del servidor (no se registra en el log) |
 
 Las respuestas repiten el `id` de la petición. Ejemplo de unicast:
 
@@ -76,7 +77,13 @@ A <------ACK|7|B|A|------ S <------ACK|7|B|A|------ B
 - Si una confirmación no llega en 3 s (`Pendientes.TIMEOUT_MS`), el cliente registra `TIMEOUT`
   y la cuenta como pérdida. Si llega después, se registra como `TARDIO`.
 - Si un cliente cierra sin `SALIR` o se corta su conexión, el servidor lo quita del registro,
-  registra `CAIDA` y envía un `AVISO` a los demás.
+  registra `CAIDA` con el motivo y envía un `AVISO` a los demás.
+- **Latido:** un equipo que se desconecta de la red (cable o Wi-Fi) no cierra la conexión TCP, así
+  que el otro extremo no se entera solo. Por eso el cliente envía `LATIDO` cada 5 s y el servidor
+  lo devuelve. Si el servidor pasa 15 s sin recibir nada de un cliente, lo da por caído
+  (`CAIDA (sin latido por 15 s)`). Si el cliente pasa 15 s sin recibir nada del servidor, se
+  cierra. Los latidos no pasan por el simulador de red, así que las pruebas de pérdida no provocan
+  caídas falsas. Los tiempos están en `Mensaje.LATIDO_INTERVALO_MS` y `LATIDO_TIMEOUT_MS`.
 - El servidor reemplaza el campo `origen` por el nombre registrado: nadie puede hacerse pasar por otro.
 - Difusión y grupo se resuelven en el servidor, que copia el mensaje por cada conexión TCP:
   es difusión/multicast **de aplicación**, no broadcast ni multicast IP.
@@ -100,15 +107,17 @@ El comando `resumen` muestra confirmaciones recibidas y esperadas, pérdida y la
 
 ## Pendiente para el grupo
 
-- [ ] **Heartbeat** para detectar un equipo desconectado de la red (cable o Wi-Fi): TCP no lo
-      avisa de inmediato. Ver el TODO en `ManejadorCliente.run()`.
+- [x] **Latido** para detectar un equipo desconectado de la red.
+- [ ] **Probar el latido entre dos computadoras:** desconectar el Wi-Fi de un cliente y ver
+      `CAIDA (sin latido por 15 s)` en el servidor.
 - [ ] **Comando `rafaga`** para medir throughput. Ver el TODO en `Cliente.ejecutar()`.
 - [ ] **Throughput y disponibilidad** en el resumen. Ver el TODO en `Pendientes.resumen()`.
 - [ ] **Experimentos:** correr con distintas pérdidas y retardos y tabular los resultados.
 - [ ] **Especificación del protocolo** en el informe; la tabla de arriba es el punto de partida.
 - [ ] **Wireshark:** capturar entre dos equipos con el filtro `tcp.port == 5000` y buscar el `id`
       del log en el contenido (clic derecho → Seguir → Flujo TCP). Capturar en una sola
-      computadora con Windows requiere Npcap con soporte de loopback.
+      computadora con Windows requiere Npcap con soporte de loopback. Los paquetes pequeños que
+      aparecen cada 5 s aunque nadie escriba son los `LATIDO`.
 
 ### Datos útiles para la discusión
 

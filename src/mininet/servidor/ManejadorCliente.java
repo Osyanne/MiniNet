@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
@@ -27,6 +28,7 @@ class ManejadorCliente implements Runnable {
     private PrintWriter salida;
     private String nombre; // null hasta que el cliente se registra
     private boolean salioOrdenadamente;
+    private String motivoCaida = "conexion cerrada sin SALIR";
 
     ManejadorCliente(Socket socket, Registro registro, SimuladorRed red) {
         this.socket = socket;
@@ -42,11 +44,11 @@ class ManejadorCliente implements Runnable {
     public void run() {
         String remoto = socket.getRemoteSocketAddress().toString();
         Log.info("Conexion TCP aceptada desde " + remoto);
-        // TODO (grupo): detectar equipos que desaparecen sin cerrar la conexion (cable o wifi
-        // desconectado): TCP no lo avisa de inmediato. Idea: socket.setSoTimeout(15000) aqui,
-        // que cada cliente envie PING al SERVIDOR cada 5 s, y tratar SocketTimeoutException
-        // como una caida del participante.
         try {
+            // Latido: si en LATIDO_TIMEOUT_MS no llega nada (ni siquiera un LATIDO), readLine lanza
+            // SocketTimeoutException. Asi se detecta un equipo que desaparece sin cerrar la conexion
+            // (cable o wifi desconectado), algo que TCP no avisa de inmediato.
+            socket.setSoTimeout(Mensaje.LATIDO_TIMEOUT_MS);
             BufferedReader entrada = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             salida = new PrintWriter(
@@ -66,8 +68,10 @@ class ManejadorCliente implements Runnable {
                     break;
                 }
             }
+        } catch (SocketTimeoutException e) {
+            motivoCaida = "sin latido por " + Mensaje.LATIDO_TIMEOUT_MS / 1000 + " s";
         } catch (IOException e) {
-            // La conexion se corto bruscamente (proceso cerrado, red caida...). Se trata en finally.
+            motivoCaida = "conexion interrumpida: " + e.getMessage();
         } finally {
             desconectar();
         }
@@ -96,6 +100,9 @@ class ManejadorCliente implements Runnable {
                 responder(m, Tipo.OK, "hasta luego");
                 return false;
             }
+            // Se devuelve para que el cliente tambien sepa que el servidor sigue ahi. No va al log:
+            // llega cada 5 s por cliente y taparia los eventos importantes.
+            case LATIDO -> enviar(m.responder(Tipo.LATIDO, Mensaje.SERVIDOR, ""));
             default -> responder(m, Tipo.ERROR, "tipo no permitido desde un cliente");
         }
         return true;
@@ -196,7 +203,7 @@ class ManejadorCliente implements Runnable {
         }
         registro.eliminar(nombre, this);
         Log.evento(nombre, Mensaje.SERVIDOR, "DESCONEXION", 0,
-                salioOrdenadamente ? "SALIR" : "CAIDA (conexion perdida)");
+                salioOrdenadamente ? "SALIR" : "CAIDA (" + motivoCaida + ")");
         avisarATodos(nombre + (salioOrdenadamente ? " salio" : " se desconecto inesperadamente"));
     }
 }

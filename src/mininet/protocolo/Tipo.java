@@ -8,10 +8,12 @@ package mininet.protocolo;
  *                        MENSAJE (unicast), DIFUSION (a todos), GRUPO (a un grupo), PING
  *                        y sus confirmaciones ACK / PONG
  * Servidor -> Cliente:   OK, ERROR, AVISO
+ * Cliente <-> Servidor:  LATIDO, cada 5 s, para detectar que el otro extremo desapareció
  */
 public enum Tipo {
     REGISTRO, LISTAR, ESTADO, UNIR, SALIR,
     MENSAJE, DIFUSION, GRUPO, PING,
     ACK, PONG,
-    OK, ERROR, AVISO
+    OK, ERROR, AVISO,
+    LATIDO
 }

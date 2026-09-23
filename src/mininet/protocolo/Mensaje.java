@@ -19,6 +19,14 @@ public record Mensaje(Tipo tipo, int id, String origen, String destino, String c
     public static final String SERVIDOR = "SERVIDOR";
     public static final String TODOS = "*";
 
+    /**
+     * Temporización del latido: el cliente envía LATIDO al servidor cada LATIDO_INTERVALO_MS y el
+     * servidor lo devuelve. Si un extremo pasa LATIDO_TIMEOUT_MS sin recibir nada (3 latidos
+     * perdidos), da al otro por caído.
+     */
+    public static final int LATIDO_INTERVALO_MS = 5000;
+    public static final int LATIDO_TIMEOUT_MS = 15000;
+
     public String serializar() {
         return tipo + "|" + id + "|" + origen + "|" + destino + "|" + contenido;
     }
