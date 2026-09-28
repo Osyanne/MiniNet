@@ -70,9 +70,9 @@ class Receptor implements Runnable {
 
     private static String etiqueta(Mensaje m) {
         return switch (m.tipo()) {
-            case DIFUSION -> "a todos";
-            case GRUPO -> "grupo " + m.destino();
-            default -> "privado";
+            case DIFUSION -> "A todos";
+            case GRUPO -> "Grupo " + m.destino();
+            default -> "Privado";
         };
     }
 }
